@@ -15,12 +15,6 @@
     profileSnapshots: "gsvr_profile_snapshots_v1",
     savedCompareSet: "gsvr_saved_compare_set_v1",
   });
-  const DBLP_STREAM_META_CACHE_VERSION = 1;
-  const DBLP_AUTHOR_SEARCH_CACHE_VERSION = 1;
-  const DBLP_CHEAP_PROFILE_CACHE_VERSION = 1;
-  const DBLP_STREAM_META_CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 180;
-  const DBLP_AUTHOR_SEARCH_CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 30;
-  const DBLP_CHEAP_PROFILE_CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 30;
   const SCORE_MODEL_VERSION = "gsvr-fractional-venue-v1";
   const AVAILABLE_RANKING_PACKS = Object.freeze(["core", "sjr"]);
   const DEFAULT_RANKING_PACKS = Object.freeze(["core", "sjr"]);
@@ -118,77 +112,8 @@
     return { ...fallback, ...value };
   }
 
-  function extractDblpPid(rawValue) {
-    const value = String(rawValue || "").trim();
-    if (!value) {
-      return null;
-    }
-
-    const directPid = value.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
-    if (/^[0-9]{1,4}\/[A-Za-z0-9-]+$/i.test(directPid)) {
-      return directPid;
-    }
-
-    const patterns = [
-      /(?:https?:\/\/)?(?:www\.)?dblp\.org\/pid\/([^/?#]+\/[^.?/#]+)(?:\.html)?(?:[?#].*)?$/i,
-      /(?:https?:\/\/)?(?:www\.)?dblp\.org\/pers\/hd\/[A-Za-z0-9]\/([^.?#]+)(?:[?#].*)?$/i,
-      /^pid\/([^/?#]+\/[^.?/#]+)(?:\.html)?$/i,
-    ];
-
-    for (const pattern of patterns) {
-      const match = value.match(pattern);
-      if (match?.[1]) {
-        return match[1].replace(/=/g, "").trim();
-      }
-    }
-
-    return null;
-  }
-
   function shouldReuseProfileCacheEntry(raw) {
-    if (!raw || typeof raw !== "object") {
-      return false;
-    }
-
-    const publicationRanks = raw.publicationRanks;
-    const hasPublicationRanks = !!publicationRanks
-      && typeof publicationRanks === "object"
-      && Object.keys(publicationRanks).length > 0;
-
-    if (!hasPublicationRanks) {
-      return true;
-    }
-
-    return typeof raw.dblpAuthorPid === "string" && raw.dblpAuthorPid.trim().length > 0;
-  }
-
-  function selectPreferredDblpPidCandidate(candidates) {
-    const list = Array.isArray(candidates) ? candidates : [];
-    for (const candidate of list) {
-      if (candidate == null) {
-        continue;
-      }
-
-      const pidValue = candidate && typeof candidate === "object"
-        ? (candidate.pid ?? candidate.dblpAuthorPid ?? null)
-        : candidate;
-      const pid = extractDblpPid(pidValue);
-      if (!pid) {
-        continue;
-      }
-
-      return {
-        pid,
-        source: candidate && typeof candidate === "object" && typeof candidate.source === "string" && candidate.source.trim()
-          ? candidate.source.trim()
-          : null,
-        tag: candidate && typeof candidate === "object" && typeof candidate.tag === "string" && candidate.tag.trim()
-          ? candidate.tag.trim()
-          : null
-      };
-    }
-
-    return { pid: null, source: null, tag: null };
+    return !!raw && typeof raw === "object";
   }
 
   function extractScholarUserId(rawValue) {
@@ -220,23 +145,6 @@
     return `https://scholar.google.com/citations?user=${encodeURIComponent(userId)}`;
   }
 
-  function extractDblpPersonUrlsFromXml(xmlText) {
-    const text = String(xmlText || "");
-    if (!text) {
-      return [];
-    }
-
-    const personBlockMatch = text.match(/<person\b[^>]*>([\s\S]*?)<\/person>/i);
-    const personBlock = personBlockMatch?.[1] || "";
-    if (!personBlock) {
-      return [];
-    }
-
-    return Array.from(personBlock.matchAll(/<url>([^<]+)<\/url>/gi))
-      .map((match) => String(match?.[1] || "").trim())
-      .filter(Boolean);
-  }
-
   function normalizePersistentCacheToken(rawValue) {
     return encodeURIComponent(
       String(rawValue || "")
@@ -244,31 +152,6 @@
         .toLowerCase()
         .replace(/\s+/g, " ")
     );
-  }
-
-  function buildDblpStreamMetaCacheKey(streamType, streamId) {
-    const type = String(streamType || "").trim().toLowerCase();
-    const id = String(streamId || "").trim().toLowerCase();
-    if (!type || !id) {
-      return null;
-    }
-    return `gsvr_dblp_stream_meta_v${DBLP_STREAM_META_CACHE_VERSION}_${normalizePersistentCacheToken(`${type}:${id}`)}`;
-  }
-
-  function buildDblpAuthorSearchCacheKey(authorName) {
-    const normalized = normalizePersistentCacheToken(authorName);
-    if (!normalized) {
-      return null;
-    }
-    return `gsvr_dblp_author_search_v${DBLP_AUTHOR_SEARCH_CACHE_VERSION}_${normalized}`;
-  }
-
-  function buildDblpCheapProfileCacheKey(pid) {
-    const normalizedPid = extractDblpPid(pid);
-    if (!normalizedPid) {
-      return null;
-    }
-    return `gsvr_dblp_profile_check_v${DBLP_CHEAP_PROFILE_CACHE_VERSION}_${normalizePersistentCacheToken(normalizedPid)}`;
   }
 
   function buildLocalVenueCandidateNames(baseItem) {
@@ -548,12 +431,6 @@
   return {
     SETTINGS_KEY,
     FEATURE_STORAGE_KEYS,
-    DBLP_STREAM_META_CACHE_VERSION,
-    DBLP_AUTHOR_SEARCH_CACHE_VERSION,
-    DBLP_CHEAP_PROFILE_CACHE_VERSION,
-    DBLP_STREAM_META_CACHE_TTL_MS,
-    DBLP_AUTHOR_SEARCH_CACHE_TTL_MS,
-    DBLP_CHEAP_PROFILE_CACHE_TTL_MS,
     SCORE_MODEL_VERSION,
     AVAILABLE_RANKING_PACKS,
     DEFAULT_RANKING_PACKS,
@@ -565,18 +442,12 @@
     normalizeFeatureState,
     buildCacheMetadata,
     isCacheMetadataCurrent,
-    extractDblpPid,
     extractScholarUserId,
     normalizeScholarProfileUrl,
-    extractDblpPersonUrlsFromXml,
-    buildDblpStreamMetaCacheKey,
-    buildDblpAuthorSearchCacheKey,
-    buildDblpCheapProfileCacheKey,
     buildLocalVenueCandidateNames,
     selectDistributedSampleIndices,
     buildScholarVerificationSample,
     shouldReuseProfileCacheEntry,
-    selectPreferredDblpPidCandidate,
     selectBestProfileVerificationCandidate,
     shouldEscalateProfileVerification,
     loadSettings,

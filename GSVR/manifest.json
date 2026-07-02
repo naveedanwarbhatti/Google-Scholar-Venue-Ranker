@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Google Scholar Venue Ranker (GSVR)",
-  "description": "Adds DBLP-verified CORE/SJR venue ranks, raw GSVR scores, completeness diagnostics, and reports to Scholar profiles.",
-  "version": "2.1.0",
+  "description": "Adds CORE/SJR venue ranks, raw GSVR scores, completeness diagnostics, and reports to Scholar profiles, matched directly from the venue text on each profile.",
+  "version": "2.2.0",
   "permissions": [
     "storage",
     "downloads"
@@ -211,7 +211,6 @@
         "core/text_normalize.js",
         "venue_data.js",
         "rank_core.js",
-        "core/journal_match.js",
         "settings.js",
         "core/score_config.js",
         "core/publication_type.js",
@@ -422,26 +421,14 @@
     "https://scholar.google.us/*",
     "https://scholar.google.vu/*",
     "https://scholar.google.ws/*",
-    "https://dblp.org/*",
-    "https://scholar.googleusercontent.com/*",
-    "https://sparql.dblp.org/*"
+    "https://scholar.googleusercontent.com/*"
   ],
   "web_accessible_resources": [
     {
       "resources": [
-        "core/CORE_2008.json",
-        "core/CORE_2010.json",
-        "core/CORE_2013.json",
-        "core/CORE_2014.json",
-        "core/CORE_2017.json",
-        "core/CORE_2018.json",
-        "core/CORE_2020.json",
-        "core/CORE_2021.json",
-        "core/CORE_2023.json",
-        "core/CORE_2026.json",
         "core/timeline_stats.js",
-        "data/sjr-index.json",
-        "icons/dblp-logo.png",
+        "rankings_worker.js",
+        "data/rankings-index.json",
         "vendor/pdfmake.min.js",
         "vendor/vfs_fonts.js"
       ],

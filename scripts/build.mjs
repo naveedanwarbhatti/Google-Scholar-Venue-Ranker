@@ -1,10 +1,21 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { generateSjrIndex } from './generate_sjr_index.mjs';
+import { generateRankingsIndex } from './generate_rankings_index.mjs';
 
 const root = process.cwd();
 const srcDir = path.join(root, 'GSVR');
 const distDir = path.join(root, 'dist');
+
+// Build inputs and dev tools only; none of these run in the extension.
+// rankings.csv (28 MB) feeds the index generator; the compact index ships.
+// journal_match.js backs the Node test suite and index generator.
+// match_cli.js / venue_accuracy_csv.js are matcher debugging CLIs.
+const IGNORE_FILES = new Set([
+  'rankings.csv',
+  'journal_match.js',
+  'match_cli.js',
+  'venue_accuracy_csv.js',
+]);
 
 // A tiny build step: copy the extension folder to ./dist so it can be loaded
 // directly via chrome://extensions (Load unpacked).
@@ -40,6 +51,7 @@ async function copyDir(src, dest) {
     if (ent.isDirectory()) {
       await copyDir(from, to);
     } else if (ent.isFile()) {
+      if (IGNORE_FILES.has(ent.name)) continue;
       await fs.copyFile(from, to);
     }
     // (No symlinks expected in this repo.)
@@ -55,12 +67,12 @@ if (!(await exists(manifestPath))) {
   throw new Error(`manifest.json not found at: ${manifestPath}`);
 }
 
-const sjrResult = await generateSjrIndex({ root });
+const indexResult = await generateRankingsIndex({ root });
 await fs.rm(distDir, { recursive: true, force: true });
 await copyDir(srcDir, distDir);
 
 console.log('Build complete.');
 console.log(`  Source: ${srcDir}`);
 console.log(`  Output: ${distDir}`);
-console.log(`  SJR index: ${sjrResult.outPath} (${sjrResult.count} entries)`);
+console.log(`  Rankings index: ${indexResult.outPath} (${indexResult.sjrCount} SJR entries, ${indexResult.coreYears} CORE years, ${indexResult.venueCount} DBLP venues)`);
 console.log('Load the extension from ./dist via chrome://extensions → Load unpacked.');

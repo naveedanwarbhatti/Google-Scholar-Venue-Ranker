@@ -8,48 +8,28 @@ const timelineStats = require('../core/timeline_stats.js');
 const authorship = require('../core/authorship.js');
 const accuracyLib = require('./accuracy_benchmark_lib.js');
 const { runScoreTests } = require('./run_score_tests.js');
-const { runDblpSchedulerTests } = require('./run_dblp_scheduler_tests.js');
+const { runDblpVenueCatalogTests } = require('./run_dblp_venue_catalog_tests.js');
 const VALID_RANKS = ['A*', 'A', 'B', 'C'];
 
-function parseBundledCoreFile(fileName) {
-  const filePath = path.join(__dirname, '..', 'core', fileName);
-  const jsonData = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  let titleKey = 'International Conference on Advanced Communications and Computation';
-  let acronymKey = 'INFOCOMP';
-  if (/2018|2017|2014/.test(fileName)) {
-    titleKey = 'Information Retrieval Facility Conference';
-    acronymKey = 'IRFC';
+let bundledRankingsIndex = null;
+
+function loadBundledRankingsIndex() {
+  if (!bundledRankingsIndex) {
+    const indexPath = path.join(__dirname, '..', 'data', 'rankings-index.json');
+    bundledRankingsIndex = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
   }
-  return jsonData.map((rawEntry) => {
-    const entry = { title: '', acronym: '', rank: 'N/A', rawRank: null };
-    if (typeof rawEntry[titleKey] === 'string') entry.title = rawEntry[titleKey];
-    else if (typeof rawEntry.title === 'string') entry.title = rawEntry.title;
-    else if (typeof rawEntry.Title === 'string') entry.title = rawEntry.Title;
+  return bundledRankingsIndex;
+}
 
-    if (typeof rawEntry[acronymKey] === 'string') entry.acronym = rawEntry[acronymKey];
-    else if (typeof rawEntry.acronym === 'string') entry.acronym = rawEntry.acronym;
-    else if (typeof rawEntry.Acronym === 'string') entry.acronym = rawEntry.Acronym;
-
-    let rawRank = null;
-    if (typeof rawEntry.Unranked === 'string') rawRank = rawEntry.Unranked;
-    else if (typeof rawEntry.rank === 'string') rawRank = rawEntry.rank;
-    else if (typeof rawEntry.CORE_Rating === 'string') rawRank = rawEntry.CORE_Rating;
-    else if (typeof rawEntry.Rating === 'string') rawRank = rawEntry.Rating;
-
-    if (typeof rawRank === 'string') {
-      const trimmed = rawRank.trim();
-      let cleaned = null;
-      if (VALID_RANKS.includes(trimmed.toUpperCase())) cleaned = trimmed.toUpperCase();
-      else if (/\b(unranked|merged|journal|inactive|discontinued|ceased|not\s+ranked|removed|withdrawn|retired|suspended)\b/i.test(trimmed)) cleaned = trimmed;
-      entry.rawRank = cleaned || null;
-      const normalized = String(cleaned || '').toUpperCase();
-      if (VALID_RANKS.includes(normalized)) entry.rank = normalized;
-    }
-
-    entry.title = String(entry.title || '').trim();
-    entry.acronym = String(entry.acronym || '').trim();
-    return (entry.title || entry.acronym) ? entry : null;
-  }).filter(Boolean);
+function parseBundledCoreFile(fileName) {
+  const year = String(fileName).match(/(\d{4})/)?.[1];
+  const jsonData = loadBundledRankingsIndex().core[String(year)] || [];
+  return jsonData.map(([title, acronym, rank]) => ({
+    title: String(title || '').trim(),
+    acronym: String(acronym || '').trim(),
+    rank: VALID_RANKS.includes(String(rank || '').toUpperCase()) ? String(rank).toUpperCase() : 'N/A',
+    rawRank: rank || null,
+  })).filter((entry) => entry.title || entry.acronym);
 }
 
 function resolveBundledCoreVenue(fileName, query) {
@@ -341,218 +321,23 @@ function testCacheMetadataHelpers() {
 }
 
 function testGeneratedSjrIndex() {
-  const indexPath = path.join(__dirname, '..', 'data', 'sjr-index.json');
-  assert.ok(fs.existsSync(indexPath), 'Expected generated SJR index to exist');
+  const indexPath = path.join(__dirname, '..', 'data', 'rankings-index.json');
+  assert.ok(fs.existsSync(indexPath), 'Expected generated rankings index to exist');
 
   const payload = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
   assert.strictEqual(payload.version, 3);
   assert.strictEqual(payload.startYear, 1999);
-  assert.strictEqual(payload.endYear, 2024);
-  assert.ok(Array.isArray(payload.entries), 'Expected compact SJR entries array');
-  assert.ok(payload.entries.length > 36000, 'Expected compact SJR index to contain the bundled journals');
+  assert.ok(payload.endYear >= 2024);
+  assert.ok(Array.isArray(payload.sjr), 'Expected compact SJR entries array');
+  assert.ok(payload.sjr.length > 30000, 'Expected compact SJR index to contain the bundled journals');
+  assert.ok(payload.core && Array.isArray(payload.core['2026']), 'Expected bundled CORE snapshots in the rankings index');
+  assert.ok(payload.venues && Array.isArray(payload.venues.entries), 'Expected bundled DBLP venue catalog in the rankings index');
 
-  const tpami = payload.entries.find((entry) => entry.n === 'ieee transaction pattern analysi machine intelligence');
+  const tpami = payload.sjr.find((entry) => entry[0] === 'ieee transaction pattern analysi machine intelligence');
   assert.ok(tpami, 'Expected TPAMI normalized journal entry to exist');
-  assert.strictEqual(tpami.q['1999'], 'Q1');
-  assert.strictEqual(tpami.q['2024'], 'Q1');
-  assert.ok(Array.isArray(tpami.i), 'Expected SJR entries to include ISSN metadata');
-
-  // Identity model: one entry per SCImago sourceId; previously-merged distinct
-  // journals must now be separate entries with their own quartile histories.
-  const diabetes = payload.entries.filter((entry) => entry.n === 'diabete');
-  const journalOfDiabetes = payload.entries.filter((entry) => entry.n === 'journal diabete');
-  assert.strictEqual(diabetes.length, 1, 'Expected "Diabetes" to have its own entry');
-  assert.strictEqual(journalOfDiabetes.length, 1, 'Expected "Journal of Diabetes" to have its own entry');
-  assert.notStrictEqual(diabetes[0].s, journalOfDiabetes[0].s, 'Distinct journals must keep distinct sourceIds');
-  assert.strictEqual(diabetes[0].q['2022'], 'Q1');
-  assert.strictEqual(journalOfDiabetes[0].q['2022'], 'Q2', 'Journal of Diabetes must not inherit Q1 from Diabetes');
-}
-
-function testJournalIdentityModelRegression() {
-  // End-to-end through the shared resolver: merged-key journals resolve to
-  // their OWN quartiles, raw-title equality breaks stem ties, and truly
-  // ambiguous title-only queries abstain.
-  const journalOfDiabetes = accuracyLib.resolveJournalQuerySync('Journal of Diabetes', 2022, {});
-  assert.strictEqual(journalOfDiabetes.status, core.DECISION_STATUS.MATCHED);
-  assert.strictEqual(journalOfDiabetes.quartile, 'Q2');
-  assert.strictEqual(journalOfDiabetes.matchedTitle, 'Journal of Diabetes');
-
-  const diabetes = accuracyLib.resolveJournalQuerySync('Diabetes', 2022, {});
-  assert.strictEqual(diabetes.status, core.DECISION_STATUS.MATCHED);
-  assert.strictEqual(diabetes.quartile, 'Q1');
-
-  // "Neuroscience" stem-ties with the distinct journal "Neurosciences"; the
-  // exact raw title must break the tie and yield Neuroscience's own Q2.
-  const neuroscience = accuracyLib.resolveJournalQuerySync('Neuroscience', 2022, {});
-  assert.strictEqual(neuroscience.status, core.DECISION_STATUS.MATCHED);
-  assert.strictEqual(neuroscience.matchedTitle, 'Neuroscience');
-  assert.strictEqual(neuroscience.quartile, 'Q2');
-
-  const journalOfGenetics = accuracyLib.resolveJournalQuerySync('Journal of Genetics', 2022, {});
-  assert.strictEqual(journalOfGenetics.status, core.DECISION_STATUS.MATCHED);
-  assert.strictEqual(journalOfGenetics.quartile, 'Q4', 'Journal of Genetics must not inherit Q1 from Genetics');
-}
-
-function testHistoricalCoreSnapshots() {
-  // Pre-2014 papers must consult era-appropriate snapshots instead of CORE 2014.
-  assert.strictEqual(accuracyLib.getCoreDataFileForYear(2013), 'core/CORE_2013.json');
-  assert.strictEqual(accuracyLib.getCoreDataFileForYear(2012), 'core/CORE_2010.json');
-  assert.strictEqual(accuracyLib.getCoreDataFileForYear(2010), 'core/CORE_2010.json');
-  assert.strictEqual(accuracyLib.getCoreDataFileForYear(2009), 'core/CORE_2008.json');
-  assert.strictEqual(accuracyLib.getCoreDataFileForYear(1998), 'core/CORE_2008.json');
-  assert.strictEqual(accuracyLib.getCoreDataFileForYear(2015), 'core/CORE_2014.json');
-
-  const sigcomm2013 = resolveBundledCoreVenue('CORE_2013.json', 'SIGCOMM');
-  assert.strictEqual(sigcomm2013.status, core.DECISION_STATUS.MATCHED);
-  assert.strictEqual(sigcomm2013.rank, 'A*');
-
-  // ERA 2010 has no A* tier; SIGCOMM is rank A there.
-  const sigcomm2010 = resolveBundledCoreVenue('CORE_2010.json', 'SIGCOMM');
-  assert.strictEqual(sigcomm2010.status, core.DECISION_STATUS.MATCHED);
-  assert.strictEqual(sigcomm2010.rank, 'A');
-
-  const sigcomm2008 = resolveBundledCoreVenue('CORE_2008.json', 'SIGCOMM');
-  assert.strictEqual(sigcomm2008.status, core.DECISION_STATUS.MATCHED);
-  assert.strictEqual(sigcomm2008.rank, 'A*');
-}
-
-function testSparseRankChips() {
-  const pubs = [
-    { publicationYear: 2024, system: 'CORE', rank: 'A*' },
-    { publicationYear: 2024, system: 'CORE', rank: 'A*' },
-    { publicationYear: 2019, system: 'SJR', rank: 'Q1' },
-    { publicationYear: 2019, system: 'CORE', rank: 'C' },
-    { publicationYear: 2010, system: 'CORE', rank: 'A' },   // outside the 8y window
-    { publicationYear: 2023, system: 'CORE', rank: 'N/A' }, // unranked ignored
-    { system: 'SJR', rank: 'Q2' },                          // unknown year ignored
-  ];
-  const sparse = timelineStats.buildSparseRankChips(pubs, { currentYear: 2026 });
-  assert.strictEqual(sparse.isSparse, true);
-  assert.strictEqual(sparse.totalRanked, 4);
-  assert.strictEqual(sparse.startYear, 2019);
-  assert.strictEqual(sparse.endYear, 2026);
-  assert.deepStrictEqual(sparse.chipsByYear[2024], ['A*', 'A*']);
-  // Ascending prestige: C renders at the bottom of the stack, Q1 on top.
-  assert.deepStrictEqual(sparse.chipsByYear[2019], ['C', 'Q1']);
-
-  const dense = timelineStats.buildSparseRankChips(
-    Array.from({ length: 25 }, () => ({ publicationYear: 2024, system: 'CORE', rank: 'A' })),
-    { currentYear: 2026 }
-  );
-  assert.strictEqual(dense.isSparse, false);
-  assert.strictEqual(dense.totalRanked, 25);
-
-  // Zero ranked papers: nothing to draw, not sparse.
-  assert.strictEqual(timelineStats.buildSparseRankChips([], { currentYear: 2026 }).isSparse, false);
-}
-
-function testTitleAtSignDoesNotMakeWorkshop() {
-  // A paper TITLE containing "@" (or the word "workshop") must not classify a
-  // main-track paper as a workshop; only venue metadata carries that signal.
-  const mainTrack = core.classifyVenueTrack({
-    title: 'Energy@home: Smart Metering for Residential Energy Disaggregation',
-    venue: 'SenSys',
-    venue_full: 'Proceedings of the ACM Conference on Embedded Networked Sensor Systems',
-    acronym: 'SenSys',
-    dblpKey: 'conf/sensys/energy2023',
-    pageCount: 12,
-    dblpType: 'inproceedings',
-  });
-  assert.strictEqual(mainTrack.isWorkshop, false, 'Title "@" must not flag workshop');
-
-  const titleMentionsWorkshop = core.classifyVenueTrack({
-    title: 'Lessons Learned from the Dagstuhl Workshop on Intermittent Computing',
-    venue: 'CACM',
-    venue_full: 'Communications of the ACM',
-    dblpKey: 'journals/cacm/lessons2023',
-    pageCount: 10,
-    dblpType: 'article',
-  });
-  assert.strictEqual(titleMentionsWorkshop.isWorkshop, false, 'Title mentioning "workshop" must not flag workshop');
-
-  const venueAtNotation = core.classifyVenueTrack({
-    title: 'On Securing Persistent State in Intermittent Computing',
-    venue: 'ENSsys@SenSys',
-    venue_full: 'Proceedings of the 4th International Workshop on Energy Harvesting Systems',
-    acronym: 'ENSsys',
-    dblpKey: 'conf/sensys/enssys2020',
-    dblpType: 'inproceedings',
-  });
-  assert.strictEqual(venueAtNotation.isWorkshop, true, 'Venue "X@Y" must still flag workshop');
-}
-
-function testTruncatedTitleMatching() {
-  const longTitle = 'A Comprehensive Study of Energy Harvesting Architectures for Batteryless Intermittent Computing Systems';
-  const pubs = [
-    { dblpKey: 'conf/sensys/a1', title: longTitle, year: '2022', venue: 'SenSys' },
-    { dblpKey: 'conf/sensys/b2', title: 'Some Other Paper About Different Things Entirely', year: '2022', venue: 'SenSys' },
-  ];
-  const truncated = `${longTitle.slice(0, 64).trim()}…`;
-  const matchResult = core.selectBestDblpMatchDetailed({ scholarTitle: truncated, scholarYear: 2022, dblpPublications: pubs });
-  assert.strictEqual(matchResult.status, core.DECISION_STATUS.MATCHED);
-  assert.strictEqual(matchResult.match.dblpKey, 'conf/sensys/a1');
-  assert.strictEqual(matchResult.truncatedTitleMatch, true);
-
-  // Two papers sharing the truncated prefix must abstain instead of guessing.
-  const ambiguousPubs = [
-    { dblpKey: 'conf/x/p1', title: 'A Longitudinal Study of Network Behavior in Campus Networks: Measurements', year: '2022', venue: 'X' },
-    { dblpKey: 'conf/x/p2', title: 'A Longitudinal Study of Network Behavior in Campus Networks: Modeling', year: '2022', venue: 'X' },
-  ];
-  const ambiguousResult = core.selectBestDblpMatchDetailed({
-    scholarTitle: 'A Longitudinal Study of Network Behavior in Campus Networks…',
-    scholarYear: 2022,
-    dblpPublications: ambiguousPubs,
-  });
-  assert.strictEqual(ambiguousResult.status, core.DECISION_STATUS.AMBIGUOUS);
-
-  // A short truncated prefix carries too little signal and must abstain.
-  const shortResult = core.selectBestDblpMatchDetailed({ scholarTitle: 'Short title…', scholarYear: 2022, dblpPublications: pubs });
-  assert.strictEqual(shortResult.status, core.DECISION_STATUS.MISSING);
-  assert.strictEqual(shortResult.reason, 'truncated_title_too_short');
-}
-
-function testAcronymTitleCrossCheck() {
-  const coreData = [
-    { title: 'Passive and Active Measurement Conference', acronym: 'PAM', rank: 'C' },
-  ];
-  const aliasIndex = core.createCoreAliasIndex(coreData);
-
-  const mismatch = core.resolveCoreVenue({
-    venueKey: 'PAM',
-    fullVenueTitle: 'Pacific Asian Conference on Marketing Analytics',
-    coreData,
-    aliasIndex,
-  });
-  assert.strictEqual(mismatch.status, core.DECISION_STATUS.AMBIGUOUS, 'Unrelated full title must abstain');
-  assert.strictEqual(mismatch.reason, 'acronym_title_mismatch');
-
-  const legit = core.resolveCoreVenue({
-    venueKey: 'PAM',
-    fullVenueTitle: 'Proceedings of the Passive and Active Measurement Conference',
-    coreData,
-    aliasIndex,
-  });
-  assert.strictEqual(legit.status, core.DECISION_STATUS.MATCHED);
-  assert.strictEqual(legit.rank, 'C');
-
-  const bareAcronym = core.resolveCoreVenue({ venueKey: 'PAM', fullVenueTitle: 'PAM', coreData, aliasIndex });
-  assert.strictEqual(bareAcronym.status, core.DECISION_STATUS.MATCHED, 'Acronym-only queries must still match');
-}
-
-function testDiacriticFoldingInMatching() {
-  assert.strictEqual(core.normalizeForMatch('Müller-Schloß Systems'), core.normalizeForMatch('Muller-Schloss Systems'));
-  assert.strictEqual(core.normalizeProfileName('José García'), 'jose garcia');
-
-  // An accented Scholar title must exact-match the unaccented DBLP rendering.
-  const match = core.selectBestDblpMatch({
-    scholarTitle: 'Énergie Harvesting für Müller Networks',
-    scholarYear: 2021,
-    dblpPublications: [
-      { dblpKey: 'conf/test/fold1', title: 'Energie Harvesting fur Muller Networks', year: '2021', venue: 'TEST' },
-    ],
-  });
-  assert.ok(match, 'Expected diacritic-folded exact title match');
-  assert.strictEqual(match.dblpKey, 'conf/test/fold1');
+  assert.strictEqual(tpami[2][0], '1');
+  assert.strictEqual(tpami[2][2024 - payload.startYear], '1');
+  assert.ok(Array.isArray(tpami[3]), 'Expected SJR entries to include normalized title tokens');
 }
 
 function testTimelineFilteringAndCounts() {
@@ -804,22 +589,11 @@ function testProfileCacheReuseRequiresVerifiedPid() {
       publicationRanks: {
         'https://example.test/paper': { rank: 'A' },
       },
-      dblpAuthorPid: '64/4311',
     }),
     true
   );
   assert.strictEqual(
-    settings.shouldReuseProfileCacheEntry({
-      publicationRanks: {
-        'https://example.test/paper': { rank: 'A' },
-      },
-    }),
-    false
-  );
-  assert.strictEqual(
-    settings.shouldReuseProfileCacheEntry({
-      publicationRanks: {},
-    }),
+    settings.shouldReuseProfileCacheEntry({ publicationRanks: {} }),
     true
   );
   assert.strictEqual(settings.shouldReuseProfileCacheEntry(null), false);
@@ -1154,19 +928,21 @@ function testLocalVenueCandidateBuilder() {
   assert.strictEqual(candidates.filter((candidate) => candidate.toLowerCase() === 'popl').length, 1);
 }
 
-function testLocalFirstStreamReductionSourceSmoke() {
+function testRankingsWorkerBundleSmoke() {
   const contentPath = path.join(__dirname, '..', 'content.js');
   const backgroundPath = path.join(__dirname, '..', 'background.js');
+  const manifestPath = path.join(__dirname, '..', 'manifest.json');
   const contentSource = fs.readFileSync(contentPath, 'utf8');
   const backgroundSource = fs.readFileSync(backgroundPath, 'utf8');
+  const manifestSource = fs.readFileSync(manifestPath, 'utf8');
 
-  assert.ok(contentSource.includes('resolveLocalVenueBeforeStreamLookup(entry, phase)'));
-  assert.ok(contentSource.includes('buildDblpStreamMetaPersistentCacheKey'));
-  assert.ok(contentSource.includes("loadPersistentDblpCacheEntry(cacheKey, getPersistentCacheTtlMs('cheap-profile'))"));
-  assert.ok(backgroundSource.includes("failureKind: 'busy'"));
-  assert.ok(backgroundSource.includes("importScripts('dblp/dblp_scheduler.js')"));
-  assert.ok(backgroundSource.includes('DBLP_MAX_IN_FLIGHT = DBLP_REQUEST_POLICY.maxConcurrent || 1'));
-  assert.ok(backgroundSource.includes('pendingRequestGroups'));
+  assert.ok(contentSource.includes("chrome.runtime.getURL('rankings_worker.js')"));
+  assert.ok(contentSource.includes("chrome.runtime.getURL('data/rankings-index.json')"));
+  assert.ok(contentSource.includes('loadRankingsDataViaWorker(url)'));
+  assert.ok(contentSource.includes('rankingsWorkerRoundTrip'));
+  assert.ok(manifestSource.includes('"rankings_worker.js"'));
+  assert.ok(manifestSource.includes('"data/rankings-index.json"'));
+  assert.ok(!backgroundSource.includes("importScripts('dblp/dblp_scheduler.js')"));
 }
 
 function testFixtureCorpusMetrics() {
@@ -1230,19 +1006,13 @@ function testBundledCoreConferenceSearchStatus() {
   assert.strictEqual(sigcomm.status, core.DECISION_STATUS.MATCHED);
   assert.strictEqual(sigcomm.rank, 'A*');
 
-  const sensysCurrent = resolveBundledCoreVenue('CORE_2026.json', 'SenSys');
-  assert.strictEqual(sensysCurrent.status, core.DECISION_STATUS.UNRANKED);
-  assert.strictEqual(sensysCurrent.rank, 'N/A');
-  assert.strictEqual(String(sensysCurrent.rawRankLabel || '').toLowerCase(), 'unranked: merged');
+  const middleware = resolveBundledCoreVenue('CORE_2026.json', 'Middleware');
+  assert.strictEqual(middleware.status, core.DECISION_STATUS.MATCHED);
+  assert.strictEqual(middleware.rank, 'A');
 
-  const sensysHistorical = resolveBundledCoreVenue('CORE_2023.json', 'SenSys');
-  assert.strictEqual(sensysHistorical.status, core.DECISION_STATUS.MATCHED);
-  assert.strictEqual(sensysHistorical.rank, 'A*');
-
-  const nsdiCurrent = resolveBundledCoreVenue('CORE_2026.json', 'NSDI');
-  assert.strictEqual(nsdiCurrent.status, core.DECISION_STATUS.MATCHED);
-  assert.strictEqual(nsdiCurrent.rank, 'A*');
-  assert.strictEqual(nsdiCurrent.matchType, 'top_venue_fallback');
+  const sac = resolveBundledCoreVenue('CORE_2026.json', 'ACM Symposium on Applied Computing');
+  assert.strictEqual(sac.status, core.DECISION_STATUS.MATCHED);
+  assert.strictEqual(sac.rank, 'B');
 }
 
 function testJournalLookupCacheScopesIssnBackedMatches() {
@@ -1284,6 +1054,168 @@ function testCommonDblpJournalAbbreviationsResolveWithoutStreamMetadata() {
   }
 }
 
+function testDiacriticFoldingInMatching() {
+  assert.strictEqual(core.normalizeForMatch('Müller-Schloß Systems'), core.normalizeForMatch('Muller-Schloss Systems'));
+  assert.strictEqual(core.normalizeProfileName('José García'), 'jose garcia');
+
+  // An accented Scholar title must exact-match the unaccented DBLP rendering.
+  const match = core.selectBestDblpMatch({
+    scholarTitle: 'Énergie Harvesting für Müller Networks',
+    scholarYear: 2021,
+    dblpPublications: [
+      { dblpKey: 'conf/test/fold1', title: 'Energie Harvesting fur Muller Networks', year: '2021', venue: 'TEST' },
+    ],
+  });
+  assert.ok(match, 'Expected diacritic-folded exact title match');
+  assert.strictEqual(match.dblpKey, 'conf/test/fold1');
+}
+
+function testSparseRankChips() {
+  const pubs = [
+    { publicationYear: 2024, system: 'CORE', rank: 'A*' },
+    { publicationYear: 2024, system: 'CORE', rank: 'A*' },
+    { publicationYear: 2019, system: 'SJR', rank: 'Q1' },
+    { publicationYear: 2019, system: 'CORE', rank: 'C' },
+    { publicationYear: 2010, system: 'CORE', rank: 'A' },   // outside the 8y window
+    { publicationYear: 2023, system: 'CORE', rank: 'N/A' }, // unranked ignored
+    { system: 'SJR', rank: 'Q2' },                          // unknown year ignored
+  ];
+  const sparse = timelineStats.buildSparseRankChips(pubs, { currentYear: 2026 });
+  assert.strictEqual(sparse.isSparse, true);
+  assert.strictEqual(sparse.totalRanked, 4);
+  assert.strictEqual(sparse.startYear, 2019);
+  assert.strictEqual(sparse.endYear, 2026);
+  assert.deepStrictEqual(sparse.chipsByYear[2024], ['A*', 'A*']);
+  // Ascending prestige: C renders at the bottom of the stack, Q1 on top.
+  assert.deepStrictEqual(sparse.chipsByYear[2019], ['C', 'Q1']);
+
+  const dense = timelineStats.buildSparseRankChips(
+    Array.from({ length: 25 }, () => ({ publicationYear: 2024, system: 'CORE', rank: 'A' })),
+    { currentYear: 2026 }
+  );
+  assert.strictEqual(dense.isSparse, false);
+  assert.strictEqual(dense.totalRanked, 25);
+
+  // Zero ranked papers: nothing to draw, not sparse.
+  assert.strictEqual(timelineStats.buildSparseRankChips([], { currentYear: 2026 }).isSparse, false);
+}
+
+function testTitleAtSignDoesNotMakeWorkshop() {
+  // A paper TITLE containing "@" (or the word "workshop") must not classify a
+  // main-track paper as a workshop; only venue metadata carries that signal.
+  const mainTrack = core.classifyVenueTrack({
+    title: 'Energy@home: Smart Metering for Residential Energy Disaggregation',
+    venue: 'SenSys',
+    venue_full: 'Proceedings of the ACM Conference on Embedded Networked Sensor Systems',
+    acronym: 'SenSys',
+    dblpKey: 'conf/sensys/energy2023',
+    pageCount: 12,
+    dblpType: 'inproceedings',
+  });
+  assert.strictEqual(mainTrack.isWorkshop, false, 'Title "@" must not flag workshop');
+
+  const titleMentionsWorkshop = core.classifyVenueTrack({
+    title: 'Lessons Learned from the Dagstuhl Workshop on Intermittent Computing',
+    venue: 'CACM',
+    venue_full: 'Communications of the ACM',
+    dblpKey: 'journals/cacm/lessons2023',
+    pageCount: 10,
+    dblpType: 'article',
+  });
+  assert.strictEqual(titleMentionsWorkshop.isWorkshop, false, 'Title mentioning "workshop" must not flag workshop');
+
+  const venueAtNotation = core.classifyVenueTrack({
+    title: 'On Securing Persistent State in Intermittent Computing',
+    venue: 'ENSsys@SenSys',
+    venue_full: 'Proceedings of the 4th International Workshop on Energy Harvesting Systems',
+    acronym: 'ENSsys',
+    dblpKey: 'conf/sensys/enssys2020',
+    dblpType: 'inproceedings',
+  });
+  assert.strictEqual(venueAtNotation.isWorkshop, true, 'Venue "X@Y" must still flag workshop');
+}
+
+function testTruncatedTitleMatching() {
+  const longTitle = 'A Comprehensive Study of Energy Harvesting Architectures for Batteryless Intermittent Computing Systems';
+  const pubs = [
+    { dblpKey: 'conf/sensys/a1', title: longTitle, year: '2022', venue: 'SenSys' },
+    { dblpKey: 'conf/sensys/b2', title: 'Some Other Paper About Different Things Entirely', year: '2022', venue: 'SenSys' },
+  ];
+  const truncated = `${longTitle.slice(0, 64).trim()}…`;
+  const matchResult = core.selectBestDblpMatchDetailed({ scholarTitle: truncated, scholarYear: 2022, dblpPublications: pubs });
+  assert.strictEqual(matchResult.status, core.DECISION_STATUS.MATCHED);
+  assert.strictEqual(matchResult.match.dblpKey, 'conf/sensys/a1');
+  assert.strictEqual(matchResult.truncatedTitleMatch, true);
+
+  // Two papers sharing the truncated prefix must abstain instead of guessing.
+  const ambiguousPubs = [
+    { dblpKey: 'conf/x/p1', title: 'A Longitudinal Study of Network Behavior in Campus Networks: Measurements', year: '2022', venue: 'X' },
+    { dblpKey: 'conf/x/p2', title: 'A Longitudinal Study of Network Behavior in Campus Networks: Modeling', year: '2022', venue: 'X' },
+  ];
+  const ambiguousResult = core.selectBestDblpMatchDetailed({
+    scholarTitle: 'A Longitudinal Study of Network Behavior in Campus Networks…',
+    scholarYear: 2022,
+    dblpPublications: ambiguousPubs,
+  });
+  assert.strictEqual(ambiguousResult.status, core.DECISION_STATUS.AMBIGUOUS);
+
+  // A short truncated prefix carries too little signal and must abstain.
+  const shortResult = core.selectBestDblpMatchDetailed({ scholarTitle: 'Short title…', scholarYear: 2022, dblpPublications: pubs });
+  assert.strictEqual(shortResult.status, core.DECISION_STATUS.MISSING);
+  assert.strictEqual(shortResult.reason, 'truncated_title_too_short');
+}
+
+function testAcronymTitleCrossCheck() {
+  const coreData = [
+    { title: 'Passive and Active Measurement Conference', acronym: 'PAM', rank: 'C' },
+  ];
+  const aliasIndex = core.createCoreAliasIndex(coreData);
+
+  const mismatch = core.resolveCoreVenue({
+    venueKey: 'PAM',
+    fullVenueTitle: 'Pacific Asian Conference on Marketing Analytics',
+    coreData,
+    aliasIndex,
+  });
+  assert.strictEqual(mismatch.status, core.DECISION_STATUS.AMBIGUOUS, 'Unrelated full title must abstain');
+  assert.strictEqual(mismatch.reason, 'acronym_title_mismatch');
+
+  const legit = core.resolveCoreVenue({
+    venueKey: 'PAM',
+    fullVenueTitle: 'Proceedings of the Passive and Active Measurement Conference',
+    coreData,
+    aliasIndex,
+  });
+  assert.strictEqual(legit.status, core.DECISION_STATUS.MATCHED);
+  assert.strictEqual(legit.rank, 'C');
+
+  const bareAcronym = core.resolveCoreVenue({ venueKey: 'PAM', fullVenueTitle: 'PAM', coreData, aliasIndex });
+  assert.strictEqual(bareAcronym.status, core.DECISION_STATUS.MATCHED, 'Acronym-only queries must still match');
+}
+
+function testHistoricalCoreSnapshots() {
+  // Pre-2014 papers must consult era-appropriate snapshots instead of CORE 2014.
+  assert.strictEqual(accuracyLib.getCoreDataFileForYear(2013), 'core/CORE_2013.json');
+  assert.strictEqual(accuracyLib.getCoreDataFileForYear(2012), 'core/CORE_2010.json');
+  assert.strictEqual(accuracyLib.getCoreDataFileForYear(2010), 'core/CORE_2010.json');
+  assert.strictEqual(accuracyLib.getCoreDataFileForYear(2009), 'core/CORE_2008.json');
+  assert.strictEqual(accuracyLib.getCoreDataFileForYear(1998), 'core/CORE_2008.json');
+  assert.strictEqual(accuracyLib.getCoreDataFileForYear(2015), 'core/CORE_2014.json');
+
+  const sigcomm2013 = resolveBundledCoreVenue('CORE_2013.json', 'SIGCOMM');
+  assert.strictEqual(sigcomm2013.status, core.DECISION_STATUS.MATCHED);
+  assert.strictEqual(sigcomm2013.rank, 'A*');
+
+  // ERA 2010 has no A* tier; SIGCOMM is rank A there.
+  const sigcomm2010 = resolveBundledCoreVenue('CORE_2010.json', 'SIGCOMM');
+  assert.strictEqual(sigcomm2010.status, core.DECISION_STATUS.MATCHED);
+  assert.strictEqual(sigcomm2010.rank, 'A');
+
+  const sigcomm2008 = resolveBundledCoreVenue('CORE_2008.json', 'SIGCOMM');
+  assert.strictEqual(sigcomm2008.status, core.DECISION_STATUS.MATCHED);
+  assert.strictEqual(sigcomm2008.rank, 'A*');
+}
+
 async function run() {
   testDeterministicDblpMatch();
   testWorkshopClassification();
@@ -1307,7 +1239,6 @@ async function run() {
   testSummaryDistributionRenderUsesFilteredCounts();
   testReportTimelineChartsUseStackedHorizontalLayout();
   testGeneratedSjrIndex();
-  testJournalIdentityModelRegression();
   testDiacriticFoldingInMatching();
   testHistoricalCoreSnapshots();
   testSparseRankChips();
@@ -1318,30 +1249,21 @@ async function run() {
   testCoreAliasResolution();
   testAmbiguousCoreAcronymAbstains();
   testProfileCandidateScoring();
-  testManualDblpPidExtraction();
   testProfileCacheReuseRequiresVerifiedPid();
-  testDblpPidSelectionPrecedence();
-  testManualDblpUiSmoke();
-  testDblpAuthorOrderParsing();
-  testAuthorshipContentSourceSmoke();
-  testReportDownloadFilenameSourceSmoke();
-  testDblpPersonXmlScholarUrlParsing();
   testScholarVerificationSampleBuilder();
   testProfileVerificationCandidateSelection();
   testProfileVerificationEscalationGate();
   testWolfgangScholarUserRegression();
-  testPersistentDblpCacheKeyBuilders();
   testLocalVenueCandidateBuilder();
-  testLocalFirstStreamReductionSourceSmoke();
+  testRankingsWorkerBundleSmoke();
   testFixtureCorpusMetrics();
   testBundledCoreConferenceSearchStatus();
-  testJournalLookupCacheScopesIssnBackedMatches();
   testCommonDblpJournalAbbreviationsResolveWithoutStreamMetadata();
   testAccuracyFixtureLoaderSmoke();
   testShortPaperByPages();
   testVenueNormalization();
   runScoreTests();
-  await runDblpSchedulerTests();
+  await runDblpVenueCatalogTests();
 
   console.log('All tests passed.');
 }

@@ -1313,21 +1313,8 @@
   line-height: 16px;
 }
 
-/* Sized to content, never fixed-width: a fixed 20px box would ellipsize
-   "Q1" into "Q.." now that badges clip overflowing text. */
-.gsr-summary-row__badge.gsr-rank-badge--circular {
-  width: auto;
-  min-width: 20px;
-  min-height: 20px;
-  line-height: 18px;
-}
-
-.gsr-summary-row__badge.gsr-rank-badge--core {
-  min-width: 30px;
-}
-
 .gsr-summary-row__status-chip {
-  min-width: 38px;
+  min-width: 0;
 }
 
 .gsr-summary-row__status-chip[data-gsr-status-chip="dblp-entry-missing"] {
@@ -1483,7 +1470,7 @@
 
 .gsr-timeline-histogram__column {
   display: grid;
-  grid-template-rows: 14px 86px 13px;
+  grid-template-rows: 14px 86px minmax(24px, auto);
   align-items: end;
   gap: 3px;
   min-width: 0;
@@ -1498,6 +1485,42 @@
   line-height: 1;
   text-align: center;
   white-space: nowrap;
+}
+
+.gsr-timeline-histogram__year {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+}
+
+.gsr-timeline-histogram__year-text {
+  display: block;
+}
+
+.gsr-timeline-histogram__year-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 2px;
+  min-height: 13px;
+  max-width: 100%;
+}
+
+.gsr-timeline-histogram__year-badge {
+  margin: 0;
+  min-width: 17px;
+  min-height: 13px;
+  height: 13px;
+  padding: 0 4px;
+  font-size: 7px;
+  line-height: 1;
+}
+
+.gsr-timeline-histogram__year-badge.gsr-rank-badge--ranked {
+  min-width: 0;
+  padding: 0 2px;
 }
 
 .gsr-timeline-histogram__bar {
@@ -1580,11 +1603,17 @@
 .gsr-timeline-histogram__legend-item {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
   color: var(--gsr-muted);
   font-size: 8.5px;
   font-weight: 800;
   line-height: 1;
+}
+
+.gsr-timeline-histogram__legend-badge {
+  margin: 0;
+  transform: scale(0.88);
+  transform-origin: left center;
 }
 
 .gsr-timeline-histogram__legend-swatch {
@@ -1628,6 +1657,60 @@
 
 .gsr-timeline-histogram--q1 .gsr-timeline-histogram__segment[data-gsr-rank="q1"] {
   background: linear-gradient(180deg, #d8a72b 0%, #a9770f 100%);
+}
+
+#gsc_rsb_cit {
+  overflow: visible !important;
+}
+
+#gsc_rsb_cit #gsc_rsb_citb {
+  position: relative;
+  margin-top: var(--gsr-scholar-year-badge-gutter, 18px);
+  margin-bottom: var(--gsr-scholar-year-badge-gutter, 18px);
+  overflow: visible !important;
+}
+
+#gsc_rsb_cit #gsc_rsb_citb.gsr-scholar-year-chart--badged {
+  min-height: calc(100% + var(--gsr-scholar-year-badge-gutter, 18px));
+}
+
+#gsc_rsb_cit .gsc_g_t {
+  overflow: visible !important;
+}
+
+#gsc_rsb_cit .gsc_g_a {
+  overflow: visible !important;
+}
+
+#gsc_rsb_cit .gsr-scholar-year-chart__shifted-node {
+  transform: translateY(var(--gsr-scholar-year-badge-gutter, 18px));
+}
+
+#gsc_rsb_cit .gsr-scholar-year-rank-badges {
+  position: absolute;
+  z-index: 3;
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  transform: translate(-50%, -100%);
+  pointer-events: auto;
+}
+
+#gsc_rsb_cit .gsr-scholar-year-rank-badge {
+  min-width: 15px;
+  min-height: 12px;
+  height: 12px;
+  padding: 0 3px;
+  font-size: 6.5px;
+  line-height: 1;
+  box-shadow: 0 1px 2px rgba(36, 52, 82, 0.16);
+}
+
+#gsc_rsb_cit .gsr-scholar-year-rank-badge.gsr-rank-badge--ranked {
+  min-width: 0;
+  padding: 0 2px;
 }
 
 .gsr-summary-row.is-active .gsr-summary-row__label,
@@ -1850,6 +1933,15 @@
   margin-left: 6px;
 }
 
+.gsr-rank-badge-inline.gsr-rank-badge--core,
+.gsr-rank-badge-inline.gsr-rank-badge--sjr {
+  width: 24px;
+  min-width: 24px;
+  max-width: 24px;
+  padding: 0;
+  box-sizing: border-box;
+}
+
 .gsr-authorship-rail {
   --gsr-authorship-rail-text: #145d74;
   --gsr-authorship-rail-border-start: #68d8ff;
@@ -1936,39 +2028,9 @@
   display: none;
 }
 
-/* Renders as a true 22x22 circle for two-character quartile chips; if long
-   text ever reaches it again, the box relaxes into a pill instead of
-   overflowing onto the publication title (defense in depth). */
-.gsr-rank-badge--circular {
-  width: auto;
-  min-width: 22px;
-  padding: 0 2px;
-  border-radius: 999px;
-}
-
-/* Placeholder chip while a row's rank is still being determined. Pulses
-   opacity only (compositor-friendly): large profiles can show hundreds of
-   these at once, and a background-position shimmer would repaint all of
-   them continuously. */
-.gsr-rank-badge--skeleton {
-  width: 34px;
-  border-color: var(--gsr-border);
-  background: var(--gsr-accent-soft);
-  animation: gsr-badge-pulse 1.6s ease-in-out infinite;
-}
-
-@keyframes gsr-badge-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.45; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .gsr-rank-badge--skeleton {
-    animation: none;
-  }
-}
-
-.gsr-rank-badge--pill {
+.gsr-rank-badge--ranked {
+  min-width: 0;
+  padding: 0 5px;
   border-radius: 999px;
 }
 

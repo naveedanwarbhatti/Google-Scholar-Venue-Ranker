@@ -50,58 +50,51 @@ function parseSjrCsv(text) {
 }
 
 function loadDataset(year = 2024) {
-  const csvPath = path.join(__dirname, '..', 'sjr', `scimagojr ${year}.csv`);
-  const text = fs.readFileSync(csvPath, 'utf8');
-  const rows = parseSjrCsv(text);
-  const header = rows[0].map(c => c.trim().toLowerCase());
-  const sourceIdIndex = header.findIndex(c => c === 'sourceid');
-  const titleIndex = header.findIndex(c => c === 'title');
-  const quartileIndex = header.findIndex(c => c === 'sjr best quartile');
-  const typeIndex = header.findIndex(c => c === 'type');
-  const issnIndex = header.findIndex(c => c === 'issn');
-  if (titleIndex < 0 || quartileIndex < 0) throw new Error('Header columns missing');
-
-  // Same identity model as the generated index: one entry per sourceId,
-  // byNormalized maps key -> array of entries.
-  const bySourceKey = new Map();
-  for (let i = 1; i < rows.length; i++) {
-    const row = rows[i];
-    if (!row || row.length <= Math.max(titleIndex, quartileIndex)) continue;
-    const type = typeIndex >= 0 ? (row[typeIndex] || '').trim().toLowerCase() : '';
-    if (type && type !== 'journal') continue;
-    const title = (row[titleIndex] || '').trim();
-    if (!title) continue;
-    const normalizedTitle = jm.normalizeJournalName(title);
-    if (!normalizedTitle) continue;
-    const quartileRaw = (row[quartileIndex] || '').trim().toUpperCase();
-    const quartile = /^Q[1-4]$/.test(quartileRaw) ? quartileRaw : null;
-    const sourceId = sourceIdIndex >= 0 ? (row[sourceIdIndex] || '').trim() || null : null;
-    const issns = issnIndex >= 0 ? jm.normalizeIssnList(row[issnIndex]) : [];
-    const sourceKey = sourceId ? `sid:${sourceId}` : `title:${normalizedTitle}`;
-
-    if (!bySourceKey.has(sourceKey)) {
-      bySourceKey.set(sourceKey, {
-        normalizedTitle,
-        resolvedTitle: title,
-        sourceId,
-        quartile,
-        quartilesByYear: quartile ? { [year]: quartile } : {},
-        issns,
-        tokenSet: jm.createTokenSet(normalizedTitle),
-      });
-    }
-  }
-
-  const entries = Array.from(bySourceKey.values());
+  // Read SCImago rows for the given year from the unified rankings.csv.
+  const text = fs.readFileSync(path.join(__dirname, '..', 'data', 'rankings.csv'), 'utf8');
   const byNormalized = new Map();
-  const byIssn = new Map();
-  for (const entry of entries) {
-    const bucket = byNormalized.get(entry.normalizedTitle);
-    if (!bucket) byNormalized.set(entry.normalizedTitle, [entry]);
-    else bucket.push(entry);
-    for (const issn of entry.issns) {
-      if (!byIssn.has(issn)) byIssn.set(issn, []);
-      byIssn.get(issn).push(entry);
+  const entries = [];
+  let field = '', row = [], inQuotes = false, header = true;
+  const endRow = () => {
+    row.push(field); field = '';
+    if (!header && row.length >= 5) {
+      const [source, yStr, title, , rank] = row;
+      if (source === 'SCImago' && parseInt(yStr, 10) === year && title && /^Q[1-4]$/.test(rank)) {
+        const normalizedTitle = normalizeJournalName(title);
+        if (normalizedTitle && !byNormalized.has(normalizedTitle)) {
+          const entry = { normalizedTitle, resolvedTitle: title, quartile: rank, tokenSet: createTokenSet(normalizedTitle) };
+          byNormalized.set(normalizedTitle, entry);
+          entries.push(entry);
+        }
+      }
+    }
+    header = false; row = [];
+  };
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"') { if (inQuotes && text[i + 1] === '"') { field += '"'; i++; } else inQuotes = !inQuotes; }
+    else if (ch === ',' && !inQuotes) { row.push(field); field = ''; }
+    else if ((ch === '\n' || ch === '\r') && !inQuotes) { if (ch === '\r' && text[i + 1] === '\n') i++; endRow(); }
+    else field += ch;
+  }
+  if (field.length || row.length) endRow();
+  return { byNormalized, entries };
+}
+
+function findBestSjrMatch(normalizedQuery, dataset) {
+  const direct = dataset.byNormalized.get(normalizedQuery);
+  if (direct) return { entry: direct, score: 1.0 };
+
+  const queryTokens = normalizedQuery.split(' ').map(t => t.trim()).filter(t => t.length >= 3);
+  const queryTokenSet = new Set(queryTokens);
+
+  let best = null;
+  for (const entry of dataset.entries) {
+    let sharesToken = queryTokens.length === 0;
+    if (!sharesToken) {
+      for (const t of queryTokenSet) {
+        if (entry.tokenSet.has(t)) { sharesToken = true; break; }
+      }
     }
   }
 

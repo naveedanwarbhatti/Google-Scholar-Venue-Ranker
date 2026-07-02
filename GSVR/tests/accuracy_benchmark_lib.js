@@ -2,18 +2,6 @@ const fs = require('fs');
 const path = require('path');
 
 const core = require('../rank_core.js');
-// Journal normalization/matching is shared with the content script and the
-// SJR index generator via core/journal_match.js so the mirror cannot drift.
-const journalMatch = require('../core/journal_match.js');
-const {
-  normalizeJournalName,
-  generateJournalNormalizationVariants,
-  createSjrTokenIndex,
-  selectSjrCandidateIndexes,
-  findBestSjrMatch,
-  normalizeIssnValue,
-  normalizeIssnList,
-} = journalMatch;
 
 const VALID_RANKS = ['A*', 'A', 'B', 'C'];
 const SJR_QUARTILES = ['Q1', 'Q2', 'Q3', 'Q4'];
@@ -50,7 +38,75 @@ const FIXTURE_FAMILIES = [
   'search_queries',
 ];
 
-// COMMON_ABBREVIATIONS now lives in core/journal_match.js.
+const COMMON_ABBREVIATIONS = {
+  "int'l": 'international',
+  intl: 'international',
+  'int.': 'international',
+  int: 'international',
+  'conf.': 'conference',
+  conf: 'conference',
+  'proc.': 'proceedings',
+  proc: 'proceedings',
+  'symp.': 'symposium',
+  symp: 'symposium',
+  'j.': 'journal',
+  j: 'journal',
+  jour: 'journal',
+  'trans.': 'transactions',
+  trans: 'transactions',
+  'annu.': 'annual',
+  annu: 'annual',
+  'comput.': 'computer',
+  comput: 'computer',
+  'comp.': 'computer',
+  comp: 'computer',
+  'commun.': 'communications',
+  commun: 'communications',
+  'comm.': 'communications',
+  comm: 'communications',
+  'rev.': 'review',
+  rev: 'review',
+  'syst.': 'systems',
+  syst: 'systems',
+  'manag.': 'management',
+  manag: 'management',
+  'process.': 'processing',
+  process: 'processing',
+  'sci.': 'science',
+  sci: 'science',
+  'sens.': 'sensor',
+  sens: 'sensor',
+  'netw.': 'networks',
+  netw: 'networks',
+  'pers.': 'personal',
+  pers: 'personal',
+  'embed.': 'embedded',
+  embed: 'embedded',
+  'distr.': 'distributed',
+  distr: 'distributed',
+  'archit.': 'architecture',
+  archit: 'architecture',
+  'tech.': 'technical',
+  tech: 'technical',
+  technol: 'technology',
+  'engin.': 'engineering',
+  engin: 'engineering',
+  'res.': 'research',
+  res: 'research',
+  'adv.': 'advances',
+  adv: 'advances',
+  'appl.': 'applications',
+  appl: 'applications',
+  'surv.': 'surveys',
+  surv: 'surveys',
+  'wirel.': 'wireless',
+  wirel: 'wireless',
+  'inf.': 'information',
+  inf: 'information',
+  'lectures notes': 'lecture notes',
+  'lect notes': 'lecture notes',
+  lncs: 'lecture notes in computer science',
+};
 
 const CONFERENCE_SEARCH_STOP_WORDS = new Set([
   'proceedings',
@@ -78,6 +134,7 @@ const CONFERENCE_SEARCH_STOP_WORDS = new Set([
 const coreDataCache = new Map();
 const coreAliasIndexCache = new Map();
 let sjrDatasetCache = null;
+let bundledRankingsIndex = null;
 
 function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
@@ -85,6 +142,13 @@ function ensureDir(dirPath) {
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+}
+
+function loadBundledRankingsIndex() {
+  if (!bundledRankingsIndex) {
+    bundledRankingsIndex = readJson(path.join(__dirname, '..', 'data', 'rankings-index.json'));
+  }
+  return bundledRankingsIndex;
 }
 
 function writeJson(filePath, payload) {
@@ -127,6 +191,24 @@ function parseYearFromText(value) {
   return match ? parseInt(match[0], 10) : null;
 }
 
+function normalizeIssnValue(value) {
+  const normalized = String(value || '').replace(/[^0-9Xx]/g, '').toUpperCase();
+  return normalized || null;
+}
+
+function normalizeIssnList(values) {
+  const list = Array.isArray(values) ? values : String(values || '').split(/[;,]/);
+  const out = [];
+  const seen = new Set();
+  for (const value of list) {
+    const normalized = normalizeIssnValue(value);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
+}
+
 function generateAcronymFromTitle(title) {
   if (!title) return '';
   const words = String(title).split(/[\s\-‑\/.,:;&]+/);
@@ -154,41 +236,19 @@ function normalizeCoreRawRankLabel(value) {
 function parseBundledCoreFile(coreDataFile) {
   const normalizedPath = String(coreDataFile || '').replace(/\\/g, '/');
   const fileName = normalizedPath.startsWith('core/') ? normalizedPath.slice(5) : normalizedPath;
-  const filePath = path.join(__dirname, '..', 'core', fileName);
-  const jsonData = readJson(filePath);
-  let titleKey = 'International Conference on Advanced Communications and Computation';
-  let acronymKey = 'INFOCOMP';
-  if (/2018|2017|2014/.test(fileName)) {
-    titleKey = 'Information Retrieval Facility Conference';
-    acronymKey = 'IRFC';
-  }
+  const year = String(fileName || '').match(/(\d{4})/)?.[1];
+  const jsonData = loadBundledRankingsIndex().core[String(year)] || [];
   return jsonData
-    .map((rawEntry) => {
-      const entry = { title: '', acronym: '', rank: 'N/A', rawRank: null };
+    .map(([title, acronym, rawRank]) => {
+      const cleanedRank = normalizeCoreRawRankLabel(rawRank);
+      const upper = String(cleanedRank || '').toUpperCase();
+      const entry = {
+        title: String(title || '').trim(),
+        acronym: String(acronym || '').trim(),
+        rank: VALID_RANKS.includes(upper) ? upper : 'N/A',
+        rawRank: cleanedRank || null,
+      };
 
-      if (typeof rawEntry[titleKey] === 'string') entry.title = rawEntry[titleKey];
-      else if (typeof rawEntry.title === 'string') entry.title = rawEntry.title;
-      else if (typeof rawEntry.Title === 'string') entry.title = rawEntry.Title;
-
-      if (typeof rawEntry[acronymKey] === 'string') entry.acronym = rawEntry[acronymKey];
-      else if (typeof rawEntry.acronym === 'string') entry.acronym = rawEntry.acronym;
-      else if (typeof rawEntry.Acronym === 'string') entry.acronym = rawEntry.Acronym;
-
-      let rawRank = null;
-      if (typeof rawEntry.Unranked === 'string') rawRank = rawEntry.Unranked;
-      else if (typeof rawEntry.rank === 'string') rawRank = rawEntry.rank;
-      else if (typeof rawEntry.CORE_Rating === 'string') rawRank = rawEntry.CORE_Rating;
-      else if (typeof rawEntry.Rating === 'string') rawRank = rawEntry.Rating;
-
-      if (rawRank) {
-        const cleanedRank = normalizeCoreRawRankLabel(rawRank);
-        entry.rawRank = cleanedRank || null;
-        const upper = String(cleanedRank || '').toUpperCase();
-        if (VALID_RANKS.includes(upper)) entry.rank = upper;
-      }
-
-      entry.title = String(entry.title || '').trim();
-      entry.acronym = String(entry.acronym || '').trim();
       if (!entry.acronym && entry.title) {
         const generated = generateAcronymFromTitle(entry.title);
         if (generated.length >= 2) entry.acronym = generated;
@@ -232,49 +292,137 @@ function getCoreDatasetYear(coreDataFile) {
   return match ? parseInt(match[1], 10) : null;
 }
 
-// cleanTextForComparison / normalizeJournalName / generateJournalNormalizationVariants /
-// createSjrTokenIndex now come from core/journal_match.js (destructured above).
+function cleanTextForComparison(text, isScholarVenue) {
+  if (!text) return '';
+  let cleanedText = String(text).toLowerCase();
+  cleanedText = cleanedText.replace(/&/g, ' and ');
+  cleanedText = cleanedText.replace(/[\.,\/#!$%\^;\*:{}=_`~?"“”()\[\]]/g, ' ');
+  cleanedText = cleanedText.replace(/\s-\s/g, ' ');
+
+  if (isScholarVenue) {
+    cleanedText = cleanedText.replace(/^(\d{4}\s+|\d{1,2}(st|nd|rd|th)\s+)/, '');
+    cleanedText = cleanedText.replace(/,\s*\d{4}$/, '');
+    cleanedText = cleanedText.replace(/\(\d{4}\)$/, '');
+    cleanedText = cleanedText.replace(/\b(part|volume|vol|issue|no|number)\s*\d+\b/g, ' ');
+    cleanedText = cleanedText.replace(/\b\d{1,3}\b\s*$/g, '');
+  }
+
+  cleanedText = cleanedText.replace(/\b\d{1,3}\b\s*$/g, '');
+  cleanedText = cleanedText.replace(/\s+/g, ' ').trim();
+
+  for (const [abbr, expansion] of Object.entries(COMMON_ABBREVIATIONS)) {
+    const regex = new RegExp(`\\b${escapeRegExp(abbr)}\\b`, 'gi');
+    cleanedText = cleanedText.replace(regex, expansion);
+  }
+
+  return cleanedText.replace(/\s+/g, ' ').trim();
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizeJournalName(name) {
+  if (!name) return '';
+  let cleaned = cleanTextForComparison(name, true);
+  if (!cleaned) return '';
+  cleaned = cleaned.replace(/\b\d{1,6}\b/g, ' ');
+  cleaned = cleaned.replace(/\s+/g, ' ').trim();
+  if (!cleaned) return '';
+
+  const stopWords = new Set([
+    'a', 'an', 'the', 'of', 'and', 'for', 'in', 'on', 'to', 'at',
+    'journal', 'international', 'transactions', 'letters',
+  ]);
+
+  const stem = (token) => {
+    if (token.length <= 4) return token;
+    if (token.endsWith('ies') && token.length > 5) return `${token.slice(0, -3)}y`;
+    if (token.endsWith('sses')) return token;
+    if (token.endsWith('s') && !token.endsWith('ss')) return token.slice(0, -1);
+    return token;
+  };
+
+  return cleaned
+    .split(' ')
+    .map((token) => token.trim())
+    .filter(Boolean)
+    .map(stem)
+    .filter((token) => token.length > 0 && !stopWords.has(token))
+    .join(' ')
+    .trim();
+}
+
+function generateJournalNormalizationVariants(name) {
+  const base = normalizeJournalName(name);
+  if (!base) return [];
+  const variants = new Set([base]);
+  if (/\bcomputer\b/.test(base)) {
+    variants.add(base.replace(/\bcomputer\b/g, 'computing'));
+  }
+  if (/\bcomputing\b/.test(base)) {
+    variants.add(base.replace(/\bcomputing\b/g, 'computer'));
+  }
+  if (/\bacm\s+computer\b/.test(base)) {
+    variants.add(base.replace(/\bacm\s+computer\b/g, 'acm computing'));
+  }
+  if (/\bcomputer\s+survey\b/.test(base)) {
+    variants.add(base.replace(/\bcomputer\b/g, 'computing'));
+  }
+  if (/\bcomputing\s+survey\b/.test(base)) {
+    variants.add(base.replace(/\bcomputing\b/g, 'computer'));
+  }
+  return Array.from(variants);
+}
+
+function createSjrTokenIndex(entries) {
+  const tokenToIndexes = new Map();
+  const tokenFrequency = new Map();
+  entries.forEach((entry, index) => {
+    const sourceTokens = Array.isArray(entry.keywordTokens) && entry.keywordTokens.length
+      ? entry.keywordTokens
+      : core.tokenizeNormalizedText(entry.normalizedTitle, 3);
+    const tokens = Array.from(new Set(sourceTokens.filter((token) => token.length >= 3)));
+    for (const token of tokens) {
+      if (!tokenToIndexes.has(token)) tokenToIndexes.set(token, new Set());
+      tokenToIndexes.get(token).add(index);
+      tokenFrequency.set(token, (tokenFrequency.get(token) || 0) + 1);
+    }
+  });
+  return { tokenToIndexes, tokenFrequency };
+}
 
 function loadSjrDataset() {
   if (sjrDatasetCache) return sjrDatasetCache;
-  const filePath = path.join(__dirname, '..', 'data', 'sjr-index.json');
-  const payload = readJson(filePath);
+  const payload = loadBundledRankingsIndex();
   const entries = [];
   const byNormalized = new Map();
   const byIssn = new Map();
+  const startYear = payload.startYear || 1999;
 
-  // Mirrors the content script: byNormalized maps key -> ARRAY of entries
-  // because distinct journals (sourceIds) can share a normalized-title key.
-  const registerKey = (key, entry) => {
-    if (!key) return;
-    const bucket = byNormalized.get(key);
-    if (!bucket) {
-      byNormalized.set(key, [entry]);
-    } else if (!bucket.includes(entry)) {
-      bucket.push(entry);
-    }
-  };
-
-  for (const rawEntry of payload.entries || []) {
-    const normalizedTitle = String(rawEntry.n || '').trim();
-    const resolvedTitle = String(rawEntry.t || '').trim();
+  for (const rawEntry of payload.sjr || []) {
+    const [normalizedRaw, titleRaw, quartileStringRaw, keywordTokensRaw] = rawEntry;
+    const normalizedTitle = String(normalizedRaw || '').trim();
+    const resolvedTitle = String(titleRaw || '').trim();
     if (!normalizedTitle || !resolvedTitle) continue;
+    const quartilesByYear = {};
+    const quartileString = String(quartileStringRaw || '');
+    for (let index = 0; index < quartileString.length; index++) {
+      const code = quartileString[index];
+      if (!/[1-4]/.test(code)) continue;
+      quartilesByYear[String(startYear + index)] = `Q${code}`;
+    }
     const entry = {
       normalizedTitle,
       resolvedTitle,
-      quartilesByYear: { ...(rawEntry.q || {}) },
-      keywordTokens: Array.isArray(rawEntry.k) ? rawEntry.k.map((value) => String(value || '').trim()).filter(Boolean) : [],
-      issns: normalizeIssnList(rawEntry.i || []),
-      sourceId: rawEntry.s ? String(rawEntry.s) : null,
-      coverage: rawEntry.c ? String(rawEntry.c) : null,
+      quartilesByYear,
+      keywordTokens: Array.isArray(keywordTokensRaw) ? keywordTokensRaw.map((value) => String(value || '').trim()).filter(Boolean) : [],
+      issns: [],
+      sourceId: null,
+      coverage: null,
     };
     entries.push(entry);
-    registerKey(normalizedTitle, entry);
-    if (Array.isArray(rawEntry.a)) {
-      for (const aliasKey of rawEntry.a) {
-        registerKey(String(aliasKey || '').trim(), entry);
-      }
-    }
+    byNormalized.set(normalizedTitle, entry);
     for (const issn of entry.issns) {
       if (!byIssn.has(issn)) byIssn.set(issn, []);
       byIssn.get(issn).push(entry);
@@ -282,8 +430,8 @@ function loadSjrDataset() {
   }
 
   sjrDatasetCache = {
-    version: payload.version || 2,
-    startYear: payload.startYear || 1999,
+    version: payload.version || 3,
+    startYear,
     endYear: payload.endYear || 2024,
     entries,
     byNormalized,
@@ -293,7 +441,130 @@ function loadSjrDataset() {
   return sjrDatasetCache;
 }
 
-// selectSjrCandidateIndexes / findBestSjrMatch now come from core/journal_match.js.
+function selectSjrCandidateIndexes(queryTokens, dataset) {
+  if (!Array.isArray(queryTokens) || !queryTokens.length || !dataset?.tokenIndex) return null;
+  const ranked = queryTokens
+    .map((token) => ({
+      token,
+      count: dataset.tokenIndex.tokenFrequency.get(token) || Number.POSITIVE_INFINITY,
+    }))
+    .filter((entry) => Number.isFinite(entry.count))
+    .sort((left, right) => left.count - right.count || left.token.localeCompare(right.token));
+
+  if (!ranked.length) return null;
+
+  let candidateSet = null;
+  for (const entry of ranked.slice(0, 3)) {
+    const indexes = dataset.tokenIndex.tokenToIndexes.get(entry.token);
+    if (!indexes?.size) continue;
+    candidateSet = candidateSet
+      ? new Set([...candidateSet].filter((index) => indexes.has(index)))
+      : new Set(indexes);
+    if (candidateSet.size > 0 && candidateSet.size <= 48) break;
+  }
+
+  if (candidateSet?.size) return candidateSet;
+  return dataset.tokenIndex.tokenToIndexes.get(ranked[0].token) || null;
+}
+
+function findBestSjrMatch({ normalizedQuery, queryIssns, dataset }) {
+  const exactIssnMatches = [];
+  for (const issn of normalizeIssnList(queryIssns)) {
+    const matches = dataset.byIssn.get(issn) || [];
+    for (const match of matches) {
+      if (!exactIssnMatches.includes(match)) exactIssnMatches.push(match);
+    }
+  }
+
+  if (exactIssnMatches.length === 1) {
+    return { status: DECISION_STATUS.MATCHED, entry: exactIssnMatches[0], score: 1, matchedBy: 'issn' };
+  }
+  if (exactIssnMatches.length > 1) {
+    const exactTitleMatch = exactIssnMatches.find((entry) => entry.normalizedTitle === normalizedQuery);
+    if (exactTitleMatch) {
+      return { status: DECISION_STATUS.MATCHED, entry: exactTitleMatch, score: 1, matchedBy: 'issn' };
+    }
+    const sourceIds = new Set(exactIssnMatches.map((entry) => entry.sourceId).filter(Boolean));
+    if (sourceIds.size === 1) {
+      const latestSourceEntry = exactIssnMatches
+        .slice()
+        .sort((left, right) => {
+          const rightYear = Math.max(0, ...Object.keys(right.quartilesByYear || {}).map((year) => Number(year)).filter(Number.isFinite));
+          const leftYear = Math.max(0, ...Object.keys(left.quartilesByYear || {}).map((year) => Number(year)).filter(Number.isFinite));
+          return rightYear - leftYear;
+        })[0];
+      if (latestSourceEntry) {
+        return { status: DECISION_STATUS.MATCHED, entry: latestSourceEntry, score: 1, matchedBy: 'issn' };
+      }
+    }
+    let bestIssnMatch = null;
+    let secondIssnMatch = null;
+    for (const entry of exactIssnMatches) {
+      const score = core.hybridSimilarity(normalizedQuery, entry.normalizedTitle);
+      const candidate = { entry, score };
+      if (!bestIssnMatch || score > bestIssnMatch.score) {
+        secondIssnMatch = bestIssnMatch;
+        bestIssnMatch = candidate;
+      } else if (!secondIssnMatch || score > secondIssnMatch.score) {
+        secondIssnMatch = candidate;
+      }
+    }
+    const issnGap = secondIssnMatch ? bestIssnMatch.score - secondIssnMatch.score : Number.POSITIVE_INFINITY;
+    if (bestIssnMatch && (bestIssnMatch.score >= 0.97 || issnGap >= core.RANKING_CONFIG.sjrAmbiguityGap)) {
+      return {
+        status: DECISION_STATUS.MATCHED,
+        entry: bestIssnMatch.entry,
+        score: bestIssnMatch.score,
+        matchedBy: 'issn',
+      };
+    }
+    return { status: DECISION_STATUS.AMBIGUOUS, score: 1, matchedBy: 'issn' };
+  }
+
+  const directMatch = dataset.byNormalized.get(normalizedQuery);
+  if (directMatch) {
+    return { status: DECISION_STATUS.MATCHED, entry: directMatch, score: 1, matchedBy: 'title_exact' };
+  }
+
+  const queryTokens = normalizedQuery
+    .split(' ')
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3);
+  const candidateIndexes = selectSjrCandidateIndexes(queryTokens, dataset)
+    || new Set(dataset.entries.map((_, index) => index));
+
+  let best = null;
+  let second = null;
+  for (const index of candidateIndexes) {
+    const entry = dataset.entries[index];
+    if (!entry) continue;
+    const score = core.hybridSimilarity(normalizedQuery, entry.normalizedTitle);
+    if (score < core.RANKING_CONFIG.sjrFuzzyThreshold) continue;
+    const candidate = { entry, score };
+    if (!best || score > best.score) {
+      second = best;
+      best = candidate;
+    } else if (!second || score > second.score) {
+      second = candidate;
+    }
+  }
+
+  if (!best) {
+    return { status: DECISION_STATUS.MISSING };
+  }
+
+  const gap = second ? best.score - second.score : Number.POSITIVE_INFINITY;
+  if (second && best.score < 0.97 && gap < core.RANKING_CONFIG.sjrAmbiguityGap) {
+    return { status: DECISION_STATUS.AMBIGUOUS, score: best.score, gap, matchedBy: 'title_fuzzy' };
+  }
+
+  return {
+    status: DECISION_STATUS.MATCHED,
+    entry: best.entry,
+    score: best.score,
+    matchedBy: 'title_fuzzy',
+  };
+}
 
 function selectQuartileForYear(data, publicationYear) {
   const entries = Object.entries(data.quartilesByYear || {})
@@ -350,7 +621,7 @@ function resolveJournalQuerySync(journalName, publicationYear, journalMeta) {
   let sawAmbiguous = false;
 
   for (const normalizedQuery of variants) {
-    const match = findBestSjrMatch({ normalizedQuery, queryIssns, dataset, rawQuery: journalName });
+    const match = findBestSjrMatch({ normalizedQuery, queryIssns, dataset });
     if (!match || match.status === DECISION_STATUS.MISSING) continue;
     if (match.status === DECISION_STATUS.AMBIGUOUS) {
       sawAmbiguous = true;
@@ -863,7 +1134,7 @@ function resolvePipelineFixture(input) {
     decisionStatus = DECISION_STATUS.UNRANKED;
   } else if (decisionStatus === DECISION_STATUS.AMBIGUOUS) {
     rank = 'N/A';
-    reason = 'Ambiguous Venue Match';
+    reason = 'Ambiguous';
   } else if ((baseResult.system === 'CORE' && !VALID_RANKS.includes(rank))
     || (baseResult.system === 'SJR' && !SJR_QUARTILES.includes(rank))) {
     rank = 'N/A';
@@ -950,11 +1221,10 @@ function evaluateFixture(fixture) {
 }
 
 function getFixtureFilesForSuite(suite) {
-  const suites = suite === 'all' ? ['gold', 'shadow', 'real'] : [suite];
-  const suiteDirs = { gold: GOLD_DIR, shadow: SHADOW_DIR, real: REAL_DIR };
+  const suites = suite === 'all' ? ['gold', 'shadow'] : [suite];
   const filePaths = [];
   for (const suiteName of suites) {
-    const suiteDir = suiteDirs[suiteName] || SHADOW_DIR;
+    const suiteDir = suiteName === 'gold' ? GOLD_DIR : SHADOW_DIR;
     if (!fs.existsSync(suiteDir)) continue;
     for (const family of FIXTURE_FAMILIES) {
       const filePath = path.join(suiteDir, `${family}.jsonl`);

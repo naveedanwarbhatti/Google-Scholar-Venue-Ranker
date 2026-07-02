@@ -1,6 +1,6 @@
 {
   "name": "gsvr",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "private": true,
   "type": "commonjs",
   "description": "Build tooling for the Google Scholar Venue Ranker Chrome extension.",
@@ -8,13 +8,15 @@
     "node": ">=18"
   },
   "scripts": {
-    "generate:sjr-index": "node scripts/generate_sjr_index.mjs",
+    "generate:rankings-index": "node scripts/generate_rankings_index.mjs",
     "clean": "node scripts/clean.mjs",
     "build": "node scripts/build.mjs",
     "test": "node GSVR/tests/run_tests.js",
     "test:unit": "node GSVR/tests/run_tests.js",
+    "test:venue-accuracy": "node GSVR/venue_accuracy_csv.js",
     "test:score": "node GSVR/tests/run_score_tests.js",
-    "test:dblp": "node GSVR/tests/run_dblp_scheduler_tests.js",
+    "test:dblp": "node GSVR/tests/run_dblp_venue_catalog_tests.js",
+    "test:dblp-venues": "node GSVR/tests/run_dblp_venue_catalog_tests.js",
     "benchmark:accuracy:fixtures": "node GSVR/tests/generate_accuracy_fixtures.js",
     "benchmark:accuracy:real-fixtures": "node GSVR/tests/generate_real_fixtures.js",
     "tune:thresholds": "node scripts/tune_thresholds.mjs",
@@ -23,6 +25,7 @@
     "benchmark:scoring": "node GSVR/tests/run_score_tests.js",
     "benchmark:calibration": "node GSVR/tests/run_score_tests.js",
     "benchmark:all": "npm run benchmark:matching && npm run benchmark:scoring && npm run benchmark:calibration",
+    "venue:accuracy": "npm run test:venue-accuracy",
 	"zip": "npm run build && node scripts/zip.mjs"
   }
 }

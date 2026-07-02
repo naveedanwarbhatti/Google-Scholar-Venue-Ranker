@@ -24,13 +24,23 @@
     ? textNormalize.foldDiacritics
     : (value) => String(value ?? '');
 
-  const DECISION_VERSION = 2;
+  const DECISION_VERSION = 3;
   const DECISION_STATUS = Object.freeze({
     MATCHED: 'matched',
     UNRANKED: 'unranked',
     AMBIGUOUS: 'ambiguous',
     MISSING: 'missing',
   });
+  const WORD_ORDINAL_ONES = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth'];
+  const WORD_ORDINAL_TEENS = ['tenth', 'eleventh', 'twelfth', 'thirteenth', 'fourteenth', 'fifteenth', 'sixteenth', 'seventeenth', 'eighteenth', 'nineteenth'];
+  const WORD_ORDINAL_TENS = ['twentieth', 'thirtieth', 'fortieth', 'fiftieth', 'sixtieth', 'seventieth', 'eightieth', 'ninetieth'];
+  const WORD_ORDINAL_TENS_PREFIXES = ['twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
+  const WORD_ORDINAL_PATTERN = new RegExp(`\\b(?:${[
+    ...WORD_ORDINAL_ONES,
+    ...WORD_ORDINAL_TEENS,
+    ...WORD_ORDINAL_TENS,
+    ...WORD_ORDINAL_TENS_PREFIXES.flatMap(prefix => WORD_ORDINAL_ONES.map(one => `${prefix}${one}`))
+  ].join('|')})\\b`, 'gi');
 
   const RANKING_CONFIG = Object.freeze({
     profileNameSimilarityThreshold: 0.72,
@@ -43,9 +53,9 @@
     publicationMaxYearDiff: 2,
     publicationStrongYearDiff: 4,
     publicationAmbiguityGap: 0.018,
-    coreFuzzyThreshold: 0.92,
+    coreFuzzyThreshold: 0.83,
     coreAmbiguityGap: 0.02,
-    sjrFuzzyThreshold: 0.92,
+    sjrFuzzyThreshold: 0.83,
     sjrAmbiguityGap: 0.015,
   });
 
@@ -88,6 +98,8 @@
     return normalizeSpaces(
       foldDiacritics(stripped)
         .toLowerCase()
+        .replace(/\p{Extended_Pictographic}/gu, ' ')
+        .replace(/[\uFE0E\uFE0F]/g, ' ')
         .replace(/&/g, ' and ')
         .replace(/[\.,\/#!$%\^&\*;:{}=\_`~?"“”'’\(\)\[\]\+＋]/g, ' ')
         .replace(/[-\u2010-\u2015]/g, ' ')
@@ -96,6 +108,7 @@
 
   function normalizeVenueCandidate(venue) {
     let normalized = normalizeForMatch(venue);
+    normalized = normalized.replace(WORD_ORDINAL_PATTERN, ' ');
     normalized = normalized.replace(/\b(part|volume|vol|issue|no|number)\s*\d+\b/g, ' ');
     normalized = normalized.replace(/\b\d{1,3}\b\s*$/g, '');
     return normalizeSpaces(normalized);
